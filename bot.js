@@ -11,6 +11,87 @@ const client = new Client({
   ],
 });
 
+// Configuration
+const CONFIG = {
+  SUPPORT_CHANNEL_ID: process.env.SUPPORT_CHANNEL_ID, // Channel where bot should respond
+  RATE_LIMIT: {
+    MAX_MESSAGES: 10, // Maximum messages per time window
+    TIME_WINDOW: 60000, // Time window in milliseconds (1 minute)
+  },
+  COOLDOWN: 3000, // Cooldown between bot responses in milliseconds
+};
+
+// Rate limiting system
+const userRateLimits = new Map();
+
+function isRateLimited(userId) {
+  const now = Date.now();
+  const userLimit = userRateLimits.get(userId) || { count: 0, timestamp: now };
+
+  // Reset if time window has passed
+  if (now - userLimit.timestamp > CONFIG.RATE_LIMIT.TIME_WINDOW) {
+    userRateLimits.set(userId, { count: 1, timestamp: now });
+    return false;
+  }
+
+  // Check if user has exceeded limit
+  if (userLimit.count >= CONFIG.RATE_LIMIT.MAX_MESSAGES) {
+    return true;
+  }
+
+  // Increment count
+  userRateLimits.set(userId, {
+    count: userLimit.count + 1,
+    timestamp: userLimit.timestamp,
+  });
+  return false;
+}
+
+// Message cooldown system
+const lastResponseTime = new Map();
+
+function isOnCooldown(channelId) {
+  const now = Date.now();
+  const lastResponse = lastResponseTime.get(channelId) || 0;
+
+  if (now - lastResponse < CONFIG.COOLDOWN) {
+    return true;
+  }
+
+  lastResponseTime.set(channelId, now);
+  return false;
+}
+
+// Function to check if message should be processed
+function shouldProcessMessage(message) {
+  // Ignore bot messages
+  if (message.author.bot) return false;
+
+  // Check if message is in the support channel
+  if (message.channelId !== CONFIG.SUPPORT_CHANNEL_ID) return false;
+
+  // Ignore system messages (joins, leaves, etc.)
+  if (message.type !== 0) return false;
+
+  // Ignore empty messages
+  if (!message.content.trim()) return false;
+
+  // Check rate limiting
+  if (isRateLimited(message.author.id)) {
+    message.reply(
+      "Please wait a moment before asking more questions. This helps prevent spam and ensures everyone gets help."
+    );
+    return false;
+  }
+
+  // Check cooldown
+  if (isOnCooldown(message.channelId)) {
+    return false;
+  }
+
+  return true;
+}
+
 // Common variations and synonyms for technical terms
 const KEYWORD_VARIATIONS = {
   tunnel: ["tunnel", "tunneling", "tunnels", "tunneled", "tunnels"],
@@ -344,17 +425,40 @@ function testFAQQueries() {
 // Bot ready
 client.once("ready", () => {
   console.log(`🤖 Logged in as ${client.user.tag}`);
+
+  // Validate configuration
+  if (!CONFIG.SUPPORT_CHANNEL_ID) {
+    console.error("ERROR: SUPPORT_CHANNEL_ID is not set in .env file!");
+    process.exit(1);
+  }
 });
 
 // Handle messages
 client.on("messageCreate", async (message) => {
-  if (message.author.bot) return; // Ignore bot messages
+  try {
+    if (!shouldProcessMessage(message)) return;
 
-  //   need to add more ignore statemnts like igonre the msg if anyone joins the chat
-  if (message.content.includes("joined the chat")) return;
+    const response = findFAQMatch(message.content);
+    await message.reply(response);
+  } catch (error) {
+    console.error("Error processing message:", error);
+    try {
+      await message.reply(
+        "I encountered an error while processing your message. Please try again later."
+      );
+    } catch (replyError) {
+      console.error("Error sending error message:", replyError);
+    }
+  }
+});
 
-  const response = findFAQMatch(message.content);
-  message.reply(response);
+// Handle errors
+client.on("error", (error) => {
+  console.error("Discord client error:", error);
+});
+
+process.on("unhandledRejection", (error) => {
+  console.error("Unhandled promise rejection:", error);
 });
 
 // Start bot
