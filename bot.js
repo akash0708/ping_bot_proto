@@ -1,5 +1,6 @@
 import { Client, GatewayIntentBits } from "discord.js";
 import dotenv from "dotenv";
+import Fuse from "fuse.js";
 
 dotenv.config();
 
@@ -298,72 +299,22 @@ function extractKeywords(text) {
   return Array.from(keywords);
 }
 
-// Function to calculate match score with context awareness
-function calculateMatchScore(messageKeywords, faqKeywords) {
-  let score = 0;
-  let contextScore = 0;
-
-  // Count matching keywords
-  messageKeywords.forEach((keyword) => {
-    if (faqKeywords.includes(keyword)) {
-      score += 1;
-    }
-  });
-
-  // Calculate context score based on important keyword matches
-  const importantKeywords = [
-    "windows",
-    "localhost",
-    "password",
-    "ssh",
-    "tunnel",
-    "error",
-    "connection",
-  ];
-  importantKeywords.forEach((keyword) => {
-    if (messageKeywords.includes(keyword) && faqKeywords.includes(keyword)) {
-      contextScore += 2;
-    }
-  });
-
-  // Special handling for very short queries
-  if (messageKeywords.length <= 2) {
-    // Boost score for important keyword matches in short queries
-    if (
-      messageKeywords.some((keyword) => importantKeywords.includes(keyword))
-    ) {
-      contextScore += 3;
-    }
-  }
-
-  // Calculate percentage of matching keywords
-  const maxPossibleScore = Math.max(messageKeywords.length, faqKeywords.length);
-  const keywordScore = score / maxPossibleScore;
-
-  // Combine scores with weights
-  return keywordScore * 0.7 + contextScore * 0.3;
-}
+// Create a Fuse instance for fuzzy searching
+const fuse = new Fuse(FAQS, {
+  keys: ["question"], // Specify the key to search in
+  threshold: 0.3, // Adjust the threshold for fuzzy matching (0.0 - exact match, 1.0 - no match)
+});
 
 // Function to match user question with improved matching
 function findFAQMatch(message) {
   const messageKeywords = extractKeywords(message);
-  const faqMatches = FAQS.map((faq) => ({
-    ...faq,
-    keywords: extractKeywords(faq.question),
-    score: calculateMatchScore(messageKeywords, extractKeywords(faq.question)),
-  }));
 
-  // Sort by score and get the best match
-  const bestMatch = faqMatches.reduce((best, current) =>
-    current.score > best.score ? current : best
-  );
+  // Use Fuse to search for the best match
+  const result = fuse.search(message);
 
-  // Lower threshold for very short queries
-  const threshold = messageKeywords.length <= 2 ? 0.15 : 0.25;
-
-  // If we have a good match, return the answer
-  if (bestMatch.score > threshold) {
-    return bestMatch.answer;
+  // Check if we have a match
+  if (result.length > 0) {
+    return result[0].item.answer; // Return the answer of the best match
   }
 
   return "I couldn't find a matching answer. Please try rephrasing your question or contact support!";
